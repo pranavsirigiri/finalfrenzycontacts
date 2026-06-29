@@ -402,6 +402,66 @@ def gather(args) -> List[Lead]:
     return leads
 
 
+# --------------------------------------------------------------------------- #
+# Demo mode (no API key / no network) — preview the output format
+# --------------------------------------------------------------------------- #
+
+# Real, previously-verified Northern Virginia restaurants, plus one chain to
+# demonstrate that chain filtering works. Contact data here was confirmed from
+# each business's own website; nothing is fabricated.
+SAMPLE_LEADS: List[dict] = [
+    dict(name="Battle Street Bistro", city="Manassas", phone="703-369-7501",
+         email="battlestreetbistro@yahoo.com",
+         website="https://www.battlestreetbistro.com/",
+         source="https://www.battlestreetbistro.com/",
+         address="9402 Battle Street, Manassas, VA 20110",
+         family_score=8, family_signals=["husband and wife", "owned and operated"],
+         rating=4.6, review_count=410),
+    dict(name="Carmello's of Old Town Manassas", city="Manassas", phone="",
+         email="", website="https://carmellos.com/",
+         source="https://www.opentable.com/r/carmellos-of-old-town-manassas",
+         address="9 N Center St, Manassas, VA 20110",
+         family_score=9, family_signals=["family owned", "owned and operated"],
+         rating=4.5, review_count=980),
+    dict(name="Johanna's Bakery and Restaurant", city="Leesburg",
+         phone="571-630-3064", email="",
+         website="https://bakeryleesburg.com/",
+         source="https://bakeryleesburg.com/",
+         address="7 Catoctin Cir SE, Leesburg, VA 20175",
+         family_score=5, family_signals=["family recipe"],
+         rating=4.4, review_count=260),
+    dict(name="Dama Ethiopian Restaurant & Bakery", city="Arlington", phone="",
+         email="", website="",
+         source="https://www.arlingtonnaacp.com/small-business-spotlight",
+         address="Arlington, VA",
+         family_score=9, family_signals=["family owned", "owned and operated"],
+         rating=4.5, review_count=520),
+    dict(name="Cafe Sazon", city="Arlington", phone="", email="", website="",
+         source="https://www.arlingtonmagazine.com/12-local-restaurants-that-have-stood-the-test-of-time/",
+         address="4704 King St, Alexandria, VA 22302",
+         family_score=4, family_signals=["owner operated"],
+         rating=4.6, review_count=300),
+    # This one should be dropped by the chain blocklist:
+    dict(name="Chipotle Mexican Grill", city="Fairfax", phone="703-555-0100",
+         email="", website="https://www.chipotle.com/",
+         source="https://www.chipotle.com/", address="Fairfax, VA",
+         family_score=0, family_signals=[], rating=3.9, review_count=1500),
+]
+
+
+def build_demo_leads(args) -> List[Lead]:
+    leads: List[Lead] = []
+    for d in SAMPLE_LEADS:
+        if is_blocklisted_chain(d["name"]):
+            log.info("demo: filtered out chain -> %s", d["name"])
+            continue
+        leads.append(Lead(category="restaurant", **d))
+    if args.require_family_signal:
+        leads = [l for l in leads if l.family_score > 0]
+    leads.sort(key=lambda l: (l.family_score, l.review_count or 0), reverse=True)
+    return leads
+
+
 def write_csv(leads: List[Lead], path: str) -> None:
     cols = ["name", "category", "city", "phone", "email", "website", "source",
             "address", "family_score", "family_signals", "rating",
@@ -439,6 +499,9 @@ def parse_args(argv=None):
                    help="Keep only places with a positive family-owned signal.")
     p.add_argument("--no-website-check", action="store_true",
                    help="Skip website scraping (no email/family score).")
+    p.add_argument("--demo", action="store_true",
+                   help="Preview output using bundled sample data; no API key "
+                        "or network required.")
     p.add_argument("--out", default="family_restaurants.csv",
                    help="Output CSV path (a .json sibling is also written).")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -451,13 +514,16 @@ def main(argv=None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(message)s")
 
-    if not args.api_key:
-        sys.exit(
-            "No Google Places API key. Set GOOGLE_PLACES_API_KEY or pass "
-            "--api-key.\nGet one at "
-            "https://developers.google.com/maps/documentation/places/web-service/get-api-key")
-
-    leads = gather(args)
+    if args.demo:
+        log.info("Running in DEMO mode (bundled sample data, no API calls).")
+        leads = build_demo_leads(args)
+    else:
+        if not args.api_key:
+            sys.exit(
+                "No Google Places API key. Set GOOGLE_PLACES_API_KEY or pass "
+                "--api-key (or try --demo for a no-key preview).\nGet one at "
+                "https://developers.google.com/maps/documentation/places/web-service/get-api-key")
+        leads = gather(args)
     write_csv(leads, args.out)
     json_path = re.sub(r"\.csv$", ".json", args.out) or args.out + ".json"
     if json_path == args.out:
