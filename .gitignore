@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Secrets / config
+.env
+*.env
+
+# Tool output (generated lead files)
+family_restaurants.csv
+family_restaurants.json
+leads.csv
+leads.json
+*.out.csv
+*.out.json
+
+# OS
+.DS_Store
