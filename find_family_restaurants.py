@@ -144,6 +144,15 @@ EMAIL_BLOCKLIST_SUBSTR = (
 PLACES_TEXTSEARCH = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 PLACES_DETAILS = "https://maps.googleapis.com/maps/api/place/details/json"
 
+# OpenStreetMap endpoints (no API key required) — default discovery source.
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Nominatim's usage policy requires a descriptive User-Agent identifying the app.
+OSM_HEADERS = {
+    "User-Agent": "family-restaurant-lead-finder/1.0 "
+                  "(https://github.com/pranavsirigiri/finalfrenzycontacts)"
+}
+
 HTTP_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -229,6 +238,96 @@ class PlacesClient:
             raise SystemExit(f"Google Places API error: {status} — "
                              f"{data.get('error_message', '')}")
         return data
+
+
+# --------------------------------------------------------------------------- #
+# OpenStreetMap client (no API key)
+# --------------------------------------------------------------------------- #
+
+class OSMClient:
+    """Keyless discovery via OpenStreetMap: Nominatim (geocode) + Overpass."""
+
+    def __init__(self, session: requests.Session):
+        self.session = session
+
+    def bbox_for(self, place: str):
+        """Geocode a place name to (south, west, north, east), or None."""
+        params = {"q": place, "format": "json", "limit": 1}
+        try:
+            r = self.session.get(NOMINATIM_URL, params=params,
+                                 headers=OSM_HEADERS, timeout=25)
+            r.raise_for_status()
+            data = r.json()
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("Nominatim failed for %s: %s", place, exc)
+            return None
+        finally:
+            time.sleep(1.0)  # Nominatim policy: <= 1 request/second
+        if not data:
+            log.warning("No geocode result for %s", place)
+            return None
+        # boundingbox is [south, north, west, east] as strings
+        s, n, w, e = (float(x) for x in data[0]["boundingbox"])
+        return (s, w, n, e)
+
+    def restaurants_in(self, bbox, max_results: int) -> List[dict]:
+        s, w, n, e = bbox
+        query = (
+            "[out:json][timeout:90];"
+            "("
+            f'node["amenity"="restaurant"]({s},{w},{n},{e});'
+            f'way["amenity"="restaurant"]({s},{w},{n},{e});'
+            ");"
+            "out center tags;"
+        )
+        try:
+            r = self.session.post(OVERPASS_URL, data=query,
+                                  headers=OSM_HEADERS, timeout=120)
+            r.raise_for_status()
+            elements = r.json().get("elements", [])
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("Overpass query failed: %s", exc)
+            return []
+        finally:
+            time.sleep(1.0)  # be gentle with the shared Overpass instance
+        return elements[:max_results]
+
+
+def osm_element_to_lead(el: dict, fallback_city: str) -> Optional[Lead]:
+    """Convert an Overpass element into a Lead, or None if it should be skipped."""
+    tags = el.get("tags", {})
+    name = tags.get("name")
+    if not name:
+        return None
+    # 'brand'/'brand:wikidata' on OSM is a strong chain marker — skip it.
+    if tags.get("brand") or tags.get("brand:wikidata"):
+        return None
+    # Skip closed/disused listings.
+    if any(k.startswith("disused:") or k.startswith("was:") for k in tags):
+        return None
+
+    addr_parts = [
+        " ".join(p for p in (tags.get("addr:housenumber"),
+                             tags.get("addr:street")) if p),
+        tags.get("addr:city"),
+        tags.get("addr:state"),
+        tags.get("addr:postcode"),
+    ]
+    address = ", ".join(p for p in addr_parts if p)
+
+    osm_type = el.get("type", "node")
+    osm_id = el.get("id")
+    return Lead(
+        name=name,
+        category="restaurant",
+        city=tags.get("addr:city") or fallback_city,
+        phone=tags.get("phone") or tags.get("contact:phone") or "",
+        email=tags.get("email") or tags.get("contact:email") or "",
+        website=tags.get("website") or tags.get("contact:website") or "",
+        source=f"https://www.openstreetmap.org/{osm_type}/{osm_id}",
+        address=address,
+        place_id=f"osm:{osm_type}/{osm_id}",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -326,80 +425,102 @@ def inspect_website(url: str, session: requests.Session) -> (int, List[str], str
 # Main routine
 # --------------------------------------------------------------------------- #
 
-def gather(args) -> List[Lead]:
-    session = requests.Session()
+def discover_osm(args, session: requests.Session) -> List[Lead]:
+    """Discover restaurants via OpenStreetMap (no API key)."""
+    client = OSMClient(session)
+    by_id: Dict[str, Lead] = {}
+    for city in args.cities:
+        log.info("Geocoding + searching (OSM): %s", city)
+        bbox = client.bbox_for(city)
+        if not bbox:
+            continue
+        elements = client.restaurants_in(bbox, args.max_per_city)
+        fallback_city = city.split(",")[0].strip()
+        for el in elements:
+            lead = osm_element_to_lead(el, fallback_city)
+            if lead and lead.place_id not in by_id:
+                by_id[lead.place_id] = lead
+    return list(by_id.values())
+
+
+def discover_google(args, session: requests.Session) -> List[Lead]:
+    """Discover restaurants via the Google Places API (requires an API key)."""
     client = PlacesClient(args.api_key, session)
-
-    raw_by_place: Dict[str, dict] = {}
-    place_city: Dict[str, str] = {}
-
+    by_id: Dict[str, Lead] = {}
     for city in args.cities:
         query = f"family owned restaurant in {city}"
-        log.info("Searching: %s", query)
-        try:
-            hits = client.text_search(query, args.max_per_city)
-        except SystemExit:
-            raise
-        for h in hits:
+        log.info("Searching (Google): %s", query)
+        for h in client.text_search(query, args.max_per_city):
             pid = h.get("place_id")
-            if pid and pid not in raw_by_place:
-                raw_by_place[pid] = h
-                place_city[pid] = city.split(",")[0]
+            if not pid or pid in by_id:
+                continue
+            det = client.details(pid)
+            if not det:
+                continue
+            if det.get("business_status") not in (None, "OPERATIONAL"):
+                continue
+            by_id[pid] = Lead(
+                name=det.get("name", h.get("name", "")),
+                city=city_from_components(det.get("address_components", []),
+                                          city.split(",")[0].strip()),
+                phone=det.get("formatted_phone_number", ""),
+                website=det.get("website", ""),
+                source=det.get("url", ""),
+                address=det.get("formatted_address", ""),
+                rating=det.get("rating"),
+                review_count=det.get("user_ratings_total"),
+                place_id=pid,
+            )
+    return list(by_id.values())
 
-    log.info("Discovered %d unique places across %d cities",
-             len(raw_by_place), len(args.cities))
 
-    # Count normalized names across all places to flag likely chains.
+def gather(args) -> List[Lead]:
+    session = requests.Session()
+
+    if args.source == "google":
+        leads = discover_google(args, session)
+    else:
+        leads = discover_osm(args, session)
+
+    log.info("Discovered %d unique restaurants across %d cities",
+             len(leads), len(args.cities))
+
+    # Drop chains: explicit blocklist + names appearing in many locations.
     name_counts: Dict[str, int] = {}
-    for h in raw_by_place.values():
-        name_counts[normalize_name(h.get("name", ""))] = \
-            name_counts.get(normalize_name(h.get("name", "")), 0) + 1
+    for l in leads:
+        key = normalize_name(l.name)
+        name_counts[key] = name_counts.get(key, 0) + 1
 
-    leads: List[Lead] = []
-    for i, (pid, hit) in enumerate(raw_by_place.items(), 1):
-        name = hit.get("name", "")
-        if is_blocklisted_chain(name):
-            log.debug("skip (blocklist chain): %s", name)
+    kept: List[Lead] = []
+    for l in leads:
+        if is_blocklisted_chain(l.name):
+            log.debug("skip (blocklist chain): %s", l.name)
             continue
-        if name_counts.get(normalize_name(name), 0) >= args.chain_threshold:
-            log.debug("skip (multi-location/chain): %s", name)
+        if name_counts.get(normalize_name(l.name), 0) >= args.chain_threshold:
+            log.debug("skip (multi-location/chain): %s", l.name)
             continue
+        kept.append(l)
 
-        log.info("[%d/%d] details: %s", i, len(raw_by_place), name)
-        det = client.details(pid)
-        if not det:
-            continue
-        if det.get("business_status") not in (None, "OPERATIONAL"):
-            log.debug("skip (not operational): %s", name)
-            continue
+    log.info("%d remain after chain filtering", len(kept))
 
-        lead = Lead(
-            name=det.get("name", name),
-            city=city_from_components(det.get("address_components", []),
-                                      place_city.get(pid, "")),
-            phone=det.get("formatted_phone_number", ""),
-            website=det.get("website", ""),
-            source=det.get("url", ""),
-            address=det.get("formatted_address", ""),
-            rating=det.get("rating"),
-            review_count=det.get("user_ratings_total"),
-            place_id=pid,
-        )
-
-        if lead.website and not args.no_website_check:
-            score, signals, email = inspect_website(lead.website, session)
-            lead.family_score = score
-            lead.family_signals = signals
-            lead.email = email
-
-        leads.append(lead)
+    # Enrich from each restaurant's website: family score + email (if missing).
+    if not args.no_website_check:
+        for i, l in enumerate(kept, 1):
+            if not l.website:
+                continue
+            log.info("[%d/%d] inspecting site: %s", i, len(kept), l.name)
+            score, signals, email = inspect_website(l.website, session)
+            l.family_score = score
+            l.family_signals = signals
+            if not l.email and email:
+                l.email = email
 
     if args.require_family_signal:
-        leads = [l for l in leads if l.family_score > 0]
+        kept = [l for l in kept if l.family_score > 0]
 
     # Rank: strongest family signal first, then most-reviewed.
-    leads.sort(key=lambda l: (l.family_score, l.review_count or 0), reverse=True)
-    return leads
+    kept.sort(key=lambda l: (l.family_score, l.review_count or 0), reverse=True)
+    return kept
 
 
 # --------------------------------------------------------------------------- #
@@ -486,8 +607,12 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description="Find small, family-owned restaurants and their public "
                     "contact info.")
+    p.add_argument("--source", choices=("osm", "google"), default="osm",
+                   help="Discovery source. 'osm' (default) needs no API key; "
+                        "'google' uses the Google Places API.")
     p.add_argument("--api-key", default=os.getenv("GOOGLE_PLACES_API_KEY"),
-                   help="Google Places API key (or set GOOGLE_PLACES_API_KEY).")
+                   help="Google Places API key (only for --source google; "
+                        "or set GOOGLE_PLACES_API_KEY).")
     p.add_argument("--cities", nargs="+", default=DEFAULT_CITIES,
                    help="Cities to search (default: Northern Virginia set).")
     p.add_argument("--max-per-city", type=int, default=20,
@@ -518,11 +643,11 @@ def main(argv=None) -> int:
         log.info("Running in DEMO mode (bundled sample data, no API calls).")
         leads = build_demo_leads(args)
     else:
-        if not args.api_key:
+        if args.source == "google" and not args.api_key:
             sys.exit(
-                "No Google Places API key. Set GOOGLE_PLACES_API_KEY or pass "
-                "--api-key (or try --demo for a no-key preview).\nGet one at "
-                "https://developers.google.com/maps/documentation/places/web-service/get-api-key")
+                "--source google needs an API key. Set GOOGLE_PLACES_API_KEY "
+                "or pass --api-key — or just use the default --source osm "
+                "(no key required).")
         leads = gather(args)
     write_csv(leads, args.out)
     json_path = re.sub(r"\.csv$", ".json", args.out) or args.out + ".json"
