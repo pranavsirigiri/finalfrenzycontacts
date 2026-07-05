@@ -35,7 +35,45 @@ pip install -r requirements.txt
 
 That's it — no key needed.
 
-## Usage
+## Dashboard (find → review → email)
+
+A Streamlit dashboard wraps the finder with a persistent database and an email
+sender, so you can discover leads, review them, and send outreach from one UI.
+
+```bash
+streamlit run app.py
+```
+
+Three tabs:
+
+1. **Find leads** — run discovery (OSM / Google / demo) into a local SQLite
+   database (`outreach.db`). Re-running merges results and de-dupes; it never
+   double-counts a restaurant or overwrites contact info you already have.
+2. **Review & send** — filter leads, edit the email template (placeholders:
+   `{name}`, `{city}`, `{family_signal}`, `{website}`, `{phone}`, `{address}`),
+   preview against a real lead, tick the leads to contact, then **dry-run** to
+   see the exact rendered emails. Sending for real requires configuring a
+   provider in the sidebar *and* ticking a confirmation box.
+3. **Sent & suppression** — an audit log of every email (dry-run and real) plus
+   a do-not-contact list. Suppressed addresses are never emailed again.
+
+### Sending safely
+
+- **Dry-run is the default.** Nothing is sent until you pick the SMTP provider
+  in the sidebar and confirm. Always dry-run first and read the output.
+- Every email gets a **CAN-SPAM footer** (physical address + an unsubscribe
+  line) built from the sidebar "Sender identity" fields — fill these in.
+- A **daily cap** and per-send **throttle** (sidebar) protect deliverability.
+  For real cold outreach use a dedicated sending domain with SPF/DKIM/DMARC —
+  not a personal Gmail. SMTP works for testing; a provider like Resend or SES
+  is the next step (add one alongside `SMTPProvider` in `sender.py`).
+- The suppression list and sent-log persist in `outreach.db`, so "already
+  contacted" and unsubscribes are honored across runs.
+
+New files: `db.py` (SQLite persistence), `sender.py` (templating + sending),
+`app.py` (the dashboard). The original CLI below still works unchanged.
+
+## CLI usage
 
 ```bash
 # Preview the output format with bundled sample data (no network):

@@ -10,6 +10,9 @@ env/
 .env
 *.env
 
+# Local database (leads, sent-log, suppression)
+outreach.db
+
 # Tool output (generated lead files)
 family_restaurants.csv
 family_restaurants.json
@@ -17,6 +20,17 @@ leads.csv
 leads.json
 *.out.csv
 *.out.json
+
+# Local scratch / test artifacts (not part of the project)
+enrich_test.csv
+enrich_test.json
+osm_test.csv
+osm_test.json
+preview.csv
+preview.json
+
+# Nested duplicate working copy (kept out of version control)
+finalfrenzycontacts/
 
 # OS
 .DS_Store
