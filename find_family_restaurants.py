@@ -36,6 +36,7 @@ import csv
 import json
 import logging
 import os
+import random
 import re
 import sys
 import time
@@ -146,7 +147,15 @@ PLACES_DETAILS = "https://maps.googleapis.com/maps/api/place/details/json"
 
 # OpenStreetMap endpoints (no API key required) — default discovery source.
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# The public Overpass servers are free but shared and rate-limited (HTTP 429) /
+# occasionally overloaded (HTTP 504). We rotate across these mirrors and retry
+# with backoff so a busy server doesn't sink the whole run.
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+OVERPASS_URL = OVERPASS_URLS[0]  # backwards-compatible default
 # Nominatim's usage policy requires a descriptive User-Agent identifying the app.
 OSM_HEADERS = {
     "User-Agent": "family-restaurant-lead-finder/1.0 "
@@ -270,7 +279,8 @@ class OSMClient:
         s, n, w, e = (float(x) for x in data[0]["boundingbox"])
         return (s, w, n, e)
 
-    def restaurants_in(self, bbox, max_results: int) -> List[dict]:
+    def restaurants_in(self, bbox, max_results: int,
+                       max_retries: int = 4) -> List[dict]:
         s, w, n, e = bbox
         query = (
             "[out:json][timeout:90];"
@@ -280,17 +290,51 @@ class OSMClient:
             ");"
             "out center tags;"
         )
-        try:
-            r = self.session.post(OVERPASS_URL, data=query,
-                                  headers=OSM_HEADERS, timeout=120)
-            r.raise_for_status()
-            elements = r.json().get("elements", [])
-        except (requests.RequestException, ValueError) as exc:
-            log.warning("Overpass query failed: %s", exc)
-            return []
-        finally:
-            time.sleep(1.0)  # be gentle with the shared Overpass instance
+        elements = self._overpass_post(query, max_retries)
+        time.sleep(1.0)  # polite gap before the next city's query
         return elements[:max_results]
+
+    def _overpass_post(self, query: str, max_retries: int) -> List[dict]:
+        """POST an Overpass query, retrying with backoff and rotating mirrors.
+
+        Handles the two failure modes of the free servers: 429 (rate limited)
+        and 504 (server overloaded). Honors a Retry-After header when present,
+        otherwise backs off exponentially with jitter, trying a different mirror
+        each attempt. Returns [] only after all retries are exhausted.
+        """
+        for attempt in range(max_retries):
+            url = OVERPASS_URLS[attempt % len(OVERPASS_URLS)]
+            try:
+                r = self.session.post(url, data=query, headers=OSM_HEADERS,
+                                      timeout=120)
+                if r.status_code in (429, 504, 503):
+                    wait = self._retry_wait(r, attempt)
+                    log.warning("Overpass %s from %s — retrying in %.0fs "
+                                "(attempt %d/%d)", r.status_code, url, wait,
+                                attempt + 1, max_retries)
+                    time.sleep(wait)
+                    continue
+                r.raise_for_status()
+                return r.json().get("elements", [])
+            except (requests.RequestException, ValueError) as exc:
+                wait = self._retry_wait(None, attempt)
+                log.warning("Overpass request to %s failed: %s — retrying in "
+                            "%.0fs (attempt %d/%d)", url, exc, wait,
+                            attempt + 1, max_retries)
+                time.sleep(wait)
+        log.error("Overpass query failed after %d attempts; skipping this area.",
+                  max_retries)
+        return []
+
+    @staticmethod
+    def _retry_wait(response, attempt: int) -> float:
+        """Seconds to wait before the next attempt (Retry-After or backoff)."""
+        if response is not None:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after and retry_after.isdigit():
+                return min(float(retry_after), 90.0)
+        # Exponential backoff with jitter: ~5, 10, 20, 40s, capped at 60.
+        return min(5.0 * (2 ** attempt), 60.0) + random.uniform(0, 2.0)
 
 
 def osm_element_to_lead(el: dict, fallback_city: str) -> Optional[Lead]:
