@@ -154,6 +154,8 @@ OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
 OVERPASS_URL = OVERPASS_URLS[0]  # backwards-compatible default
 # Nominatim's usage policy requires a descriptive User-Agent identifying the app.
@@ -280,18 +282,21 @@ class OSMClient:
         return (s, w, n, e)
 
     def restaurants_in(self, bbox, max_results: int,
-                       max_retries: int = 4) -> List[dict]:
+                       max_retries: int = 5) -> List[dict]:
         s, w, n, e = bbox
+        # `out tags` (not `out center tags`): we only need names/contact tags,
+        # never coordinates, so we skip the server-side geometry work that makes
+        # the query heavy and prone to 504s.
         query = (
-            "[out:json][timeout:90];"
+            "[out:json][timeout:60];"
             "("
             f'node["amenity"="restaurant"]({s},{w},{n},{e});'
             f'way["amenity"="restaurant"]({s},{w},{n},{e});'
             ");"
-            "out center tags;"
+            "out tags;"
         )
         elements = self._overpass_post(query, max_retries)
-        time.sleep(1.0)  # polite gap before the next city's query
+        time.sleep(2.0)  # polite gap before the next city's query
         return elements[:max_results]
 
     def _overpass_post(self, query: str, max_retries: int) -> List[dict]:
