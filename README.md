@@ -8,6 +8,66 @@ It is built specifically for restaurants and actively filters **out** chains and
 franchises. **No API key required** by default. It never fabricates data: a
 field is blank when no source provides it.
 
+---
+
+## 🚀 Quick start — run the app (no coding needed)
+
+These steps are written for macOS and assume the one-time setup below has
+already been done (dependencies installed into a `.venv` folder).
+
+**1. Open the Terminal app**
+Press **⌘ (Command) + Spacebar**, type **`Terminal`**, press **Return**.
+
+**2. Copy this ONE line, paste it into Terminal, press Return:**
+
+```bash
+cd /Users/pranavsirigiri/frenzycontacttool && ./.venv/bin/streamlit run app.py
+```
+
+*(To paste in Terminal: click the window, press **⌘ + V**, then **Return**.)*
+
+**3. Your browser opens the dashboard automatically** at
+`http://localhost:8501`. If it doesn't, open a browser and go to
+**`localhost:8501`**.
+
+**4. Use the three tabs:**
+
+| Tab | What you do |
+|-----|-------------|
+| **1 · Find leads** | Pick a **Source**, enter a few cities, click **Run search**. Start with source `demo (sample data)` to try it with no internet. Use `osm` for real free searches (do 1–3 cities at a time), or `google` for the most reliable results (needs a free API key — see below). |
+| **2 · Review & send** | See the restaurants in a table. Click **⬇️ Download these leads as a spreadsheet (CSV)** to open them in Excel/Numbers. Edit the email template, **Dry-run preview** to see the exact emails (nothing is sent), then send for real only after configuring a provider + ticking the confirm box. |
+| **3 · Sent & suppression** | A log of every email, plus a do-not-contact list. |
+
+**5. To stop the app:** go back to Terminal and press **Control + C**.
+
+**6. Next time:** just repeat steps 1–3. Same one line every time.
+
+> **Getting the latest updates:** if the code has changed, run
+> `cd /Users/pranavsirigiri/frenzycontacttool && git pull` first, then
+> restart the app. If the running app shows **"Source file changed → Rerun"**
+> in the top-right, click **Rerun**.
+
+### First-time setup (only needed once, on a new computer)
+
+```bash
+cd /Users/pranavsirigiri/frenzycontacttool
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+```
+
+Then use the Quick start steps above.
+
+### Optional: reliable searches with a Google Places key
+
+The free OpenStreetMap servers occasionally rate-limit (HTTP 429/504). For
+rock-solid results, get a free Google Places API key
+([console.cloud.google.com](https://console.cloud.google.com/): create a
+project → enable **Places API** → **Credentials → Create API key**), then in
+the **Find leads** tab set **Source** to `google` and paste the key. A generous
+monthly free tier means most small users pay nothing.
+
+---
+
 ## How it works
 
 1. **Discover** — for each city, geocodes a bounding box via OpenStreetMap
