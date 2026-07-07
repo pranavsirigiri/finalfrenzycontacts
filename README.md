@@ -36,7 +36,7 @@ cd /Users/pranavsirigiri/frenzycontacttool && ./.venv/bin/streamlit run app.py
 |-----|-------------|
 | **1 · Find leads** | Pick a **Source**, enter a few cities, click **Run search**. Start with source `demo (sample data)` to try it with no internet. Use `osm` for real free searches (do 1–3 cities at a time), or `google` for the most reliable results (needs a free API key — see below). |
 | **2 · Review & send** | See the restaurants in a table. Click **⬇️ Download these leads as a spreadsheet (CSV)** to open them in Excel/Numbers. Edit the email template, **Dry-run preview** to see the exact emails (nothing is sent), then send for real only after configuring a provider + ticking the confirm box. |
-| **3 · Sent & suppression** | A log of every email, plus a do-not-contact list. |
+| **3 · Sent & suppression** | A log of every email, a do-not-contact list, and **Data backup & restore** — download your whole database as one file, or restore a previous backup. |
 
 **5. To stop the app:** go back to Terminal and press **Control + C**.
 

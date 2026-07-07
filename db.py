@@ -359,6 +359,36 @@ def stats(conn: sqlite3.Connection) -> Dict[str, int]:
     }
 
 
+def backup_bytes(conn: sqlite3.Connection) -> bytes:
+    """Return a consistent snapshot of the whole database as bytes.
+
+    Uses SQLite's online backup API into a temporary file so the snapshot is
+    safe even if writes are in flight. Suitable for a one-click download.
+    """
+    import os
+    import tempfile
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        dest = sqlite3.connect(tmp_path)
+        with dest:
+            conn.backup(dest)
+        dest.close()
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def is_valid_sqlite(data: bytes) -> bool:
+    """Cheap sanity check that uploaded bytes look like a SQLite database."""
+    return data[:16] == b"SQLite format 3\x00"
+
+
 if __name__ == "__main__":
     # Smoke test: create an in-memory DB, insert a lead, exercise the API.
     c = connect(":memory:")

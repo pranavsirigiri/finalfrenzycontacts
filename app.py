@@ -16,6 +16,7 @@ the sidebar AND ticking the confirmation box. Nothing goes out by accident.
 from __future__ import annotations
 
 import argparse
+import time
 
 import pandas as pd
 import streamlit as st
@@ -290,3 +291,43 @@ with tab_log:
         } for r in sup]), hide_index=True, width="stretch")
     else:
         st.caption("No suppressed addresses.")
+
+    st.divider()
+    st.subheader("Data backup & restore")
+    st.caption("Your leads, sent-log and suppression list all live in one file "
+               "(outreach.db). Back it up here, or restore a previous backup.")
+
+    bcol1, bcol2 = st.columns(2)
+    with bcol1:
+        st.markdown("**Backup** — download the whole database as one file.")
+        st.download_button(
+            "⬇️ Download full database backup",
+            data=db.backup_bytes(conn),
+            file_name=f"outreach-backup-{time.strftime('%Y%m%d')}.db",
+            mime="application/octet-stream")
+
+    with bcol2:
+        st.markdown("**Restore** — replace current data with a backup file.")
+        upload = st.file_uploader("Choose a backup (.db) file", type=["db"])
+        confirm_restore = st.checkbox(
+            "I understand this REPLACES all current data")
+        if st.button("Restore now", type="primary",
+                     disabled=not (upload and confirm_restore)):
+            data = upload.getvalue()
+            if not db.is_valid_sqlite(data):
+                st.error("That file doesn't look like a valid database backup.")
+            else:
+                # Snapshot the current data first, then swap in the upload and
+                # reload with a fresh connection.
+                try:
+                    safety = db.backup_bytes(conn)
+                    with open(db.DEFAULT_DB_PATH + ".pre-restore.bak", "wb") as f:
+                        f.write(safety)
+                except Exception:  # noqa: BLE001 — best-effort safety copy
+                    pass
+                conn.close()
+                with open(db.DEFAULT_DB_PATH, "wb") as f:
+                    f.write(data)
+                get_conn.clear()  # drop the cached (now-closed) connection
+                st.success("Database restored. Reloading…")
+                st.rerun()
