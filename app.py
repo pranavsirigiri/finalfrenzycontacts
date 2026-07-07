@@ -185,6 +185,21 @@ with tab_send:
                 leads[0], identity)
             st.text(f"To: {leads[0].get('email','')}\nSubject: {subj}\n\n{body}")
 
+        # Download the full matching set as a spreadsheet (CSV opens in Excel /
+        # Numbers / Google Sheets).
+        export_df = pd.DataFrame([{
+            "name": l["name"], "city": l["city"], "phone": l["phone"],
+            "email": l["email"], "website": l["website"],
+            "address": l["address"], "family_score": l["family_score"],
+            "family_signals": "; ".join(l.get("family_signals") or []),
+            "rating": l["rating"], "review_count": l["review_count"],
+            "status": l["status"], "source": l["source"],
+        } for l in leads])
+        st.download_button(
+            "⬇️ Download these leads as a spreadsheet (CSV)",
+            data=export_df.to_csv(index=False).encode("utf-8"),
+            file_name="restaurant_leads.csv", mime="text/csv")
+
         # Selectable table.
         df = pd.DataFrame([{
             "send": True,
